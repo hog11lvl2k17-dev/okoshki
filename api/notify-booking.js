@@ -4,10 +4,9 @@ export default async function handler(req, res) {
   }
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_MASTER_CHAT_ID;
 
-  if (!token || !chatId) {
-    console.log("Telegram notification skipped: env vars are missing");
+  if (!token) {
+    console.log("Telegram notification skipped: TELEGRAM_BOT_TOKEN is missing");
     return res.status(200).json({ ok: false, skipped: true });
   }
 
@@ -15,6 +14,7 @@ export default async function handler(req, res) {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const {
+      masterTelegramId = "",
       masterName = "Мастер",
       clientName = "Клиент",
       clientContact = "",
@@ -25,6 +25,13 @@ export default async function handler(req, res) {
       note = "",
       appUrl = "",
     } = body || {};
+
+    const chatId = masterTelegramId || process.env.TELEGRAM_MASTER_CHAT_ID;
+
+    if (!chatId) {
+      console.log("Telegram notification skipped: chat id is missing");
+      return res.status(200).json({ ok: false, skipped: true });
+    }
 
     const text = [
       "🔥 Новая запись в Окошках",

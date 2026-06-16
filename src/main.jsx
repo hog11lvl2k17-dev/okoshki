@@ -39,6 +39,32 @@ function makeSlug(text) {
   return `${base || "master"}_${Math.floor(Math.random() * 100000)}`;
 }
 
+function getTelegramUser() {
+  try {
+    const user = WebApp?.initDataUnsafe?.user;
+
+    if (user?.id) {
+      return {
+        id: String(user.id),
+        username: user.username || "",
+        first_name: user.first_name || "",
+        last_name: user.last_name || "",
+      };
+    }
+  } catch {}
+
+  return null;
+}
+
+function telegramContact(user) {
+  if (!user) return "";
+  return user.username ? `@${user.username}` : user.first_name || "";
+}
+
+function slotSort(a, b) {
+  return `${a.slot_date || ""} ${a.slot_time || ""}`.localeCompare(`${b.slot_date || ""} ${b.slot_time || ""}`);
+}
+
 const demoServices = [
   { id: makeId(), name: "Маникюр + покрытие", price: 1800, duration: 120 },
   { id: makeId(), name: "Брови: коррекция", price: 1200, duration: 60 },
@@ -55,6 +81,8 @@ const demoState = {
     category: "manicure",
     rating: 5,
     reviews_count: 2,
+    contact: "@anna_okoshki",
+    telegram_id: "",
   },
   services: demoServices,
   slots: [
@@ -73,12 +101,14 @@ const demoCategories = [
   { id: "barber", slug: "barber", name: "Барбер", emoji: "💈" },
   { id: "tattoo", slug: "tattoo", name: "Тату", emoji: "🖋️" },
   { id: "massage", slug: "massage", name: "Массаж", emoji: "💆" },
+  { id: "cosmetology", slug: "cosmetology", name: "Косметология", emoji: "🧴" },
 ];
 
 function App() {
   const [mode, setMode] = useState(hasSupabaseConfig ? "supabase" : "local");
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState("market");
+  const [masterView, setMasterView] = useState("overview");
   const [state, setState] = useState(demoState);
   const [masters, setMasters] = useState([demoState.master]);
   const [categories, setCategories] = useState(demoCategories);
@@ -87,7 +117,9 @@ function App() {
   const [selectedSlotId, setSelectedSlotId] = useState(null);
   const [bookingForm, setBookingForm] = useState({ name: "", contact: "", note: "" });
   const [toast, setToast] = useState("");
-  const [role, setRole] = useState(() => localStorage.getItem("okoshki_role") || "client");
+  const [role, setRole] = useState("client");
+  const [telegramUser, setTelegramUser] = useState(() => getTelegramUser());
+  const [masterAccount, setMasterAccount] = useState(null);
   const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
   const [lastBooking, setLastBooking] = useState(null);
   const [masterForm, setMasterForm] = useState({
@@ -95,7 +127,7 @@ function App() {
     city: "Красноярск",
     category: "manicure",
     about: "",
-    contact: "",
+    contact: telegramContact(getTelegramUser()),
   });
   const [isMasterCreating, setIsMasterCreating] = useState(false);
   const bookingLock = useRef(false);
@@ -105,14 +137,17 @@ function App() {
       WebApp.ready();
       WebApp.expand();
     } catch {}
+
+    const user = getTelegramUser();
+    if (user) {
+      setTelegramUser(user);
+      setBookingForm((p) => ({ ...p, contact: p.contact || telegramContact(user) }));
+      setMasterForm((p) => ({ ...p, contact: p.contact || telegramContact(user) }));
+    }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("okoshki_role", role);
-  }, [role]);
-
-  useEffect(() => {
-    if (role === "client" && ["master", "bookings", "clients"].includes(screen)) {
+    if (role === "client" && ["master", "bookings", "clients", "master-services", "master-slots", "master-profile"].includes(screen)) {
       setScreen("market");
     }
   }, [role, screen]);
@@ -148,21 +183,54 @@ function App() {
     }
 
     try {
+      const currentTgUser = getTelegramUser() || telegramUser;
+
+      if (currentTgUser) {
+        setTelegramUser(currentTgUser);
+      }
+
       const [{ data: cats }, { data: masterList }] = await Promise.all([
         supabase.from("categories").select("*").order("name"),
         supabase.from("masters").select("*").eq("is_visible", true).order("rating", { ascending: false }),
       ]);
 
-      if (cats?.length) setCategories([{ id: "all", slug: "all", name: "Все", emoji: "✨" }, ...cats]);
-      if (masterList?.length) {
-        setMasters(masterList);
-        setCity(masterList[0].city || "Красноярск");
+      const list = masterList || [];
+      const params = new URLSearchParams(window.location.search);
+      const slugFromLink = params.get("master");
+
+      if (cats?.length) {
+        setCategories([{ id: "all", slug: "all", name: "Все", emoji: "✨" }, ...cats]);
       }
 
-      const params = new URLSearchParams(window.location.search);
-      const slug = params.get("master") || masterList?.[0]?.slug || DEFAULT_MASTER_SLUG;
+      setMasters(list);
 
-      await loadMaster(slug, false);
+      const ownMaster = currentTgUser?.id
+        ? list.find((m) => String(m.telegram_id || "") === currentTgUser.id)
+        : null;
+
+      if (ownMaster) {
+        setMasterAccount(ownMaster);
+      } else {
+        setMasterAccount(null);
+      }
+
+      if (slugFromLink) {
+        setRole("client");
+        await loadMaster(slugFromLink, true);
+        setCity(list.find((m) => m.slug === slugFromLink)?.city || list[0]?.city || "Красноярск");
+      } else if (ownMaster) {
+        setRole("master");
+        setMasterView("overview");
+        setScreen("master");
+        setCity(ownMaster.city || list[0]?.city || "Красноярск");
+        await loadMaster(ownMaster.slug, false);
+      } else {
+        setRole("client");
+        setScreen("market");
+        setCity(list[0]?.city || "Красноярск");
+        await loadMaster(list[0]?.slug || DEFAULT_MASTER_SLUG, false);
+      }
+
       setMode("supabase");
     } catch (e) {
       console.error(e);
@@ -205,17 +273,35 @@ function App() {
     setState({
       master,
       services: services || [],
-      slots: slots || [],
+      slots: (slots || []).sort(slotSort),
       bookings: bookings || [],
       clients: clients || [],
       reviews: reviews || [],
     });
 
+    if (telegramUser?.id && String(master.telegram_id || "") === telegramUser.id) {
+      setMasterAccount(master);
+    }
+
     if (openProfile) setScreen("public");
   }
 
+  async function openOwnMasterCabinet(master = masterAccount) {
+    if (!master) {
+      setRole("client");
+      setScreen("become-master");
+      return;
+    }
+
+    setRole("master");
+    setMasterView("overview");
+    setScreen("master");
+    await loadMaster(master.slug, false);
+  }
+
   const activeBookings = state.bookings.filter((b) => b.status !== "cancelled");
-  const freeSlots = state.slots.filter((s) => s.is_active !== false && !bookingForSlot(s.id));
+  const freeSlots = state.slots.filter((s) => s.is_active !== false && !bookingForSlot(s.id)).sort(slotSort);
+  const busySlots = state.slots.filter((s) => s.is_active !== false && bookingForSlot(s.id)).sort(slotSort);
   const todayBookings = activeBookings.filter((b) => slotById(b.slot_id)?.slot_date === todayISO);
   const todayIncome = todayBookings.reduce((sum, b) => {
     const slot = slotById(b.slot_id);
@@ -234,13 +320,30 @@ function App() {
     return cityOk && catOk;
   });
 
+  const setupSteps = [
+    { done: Boolean(state.master.name && state.master.about), title: "Заполнить профиль" },
+    { done: state.services.length > 0, title: "Добавить хотя бы одну услугу" },
+    { done: freeSlots.length > 0, title: "Опубликовать свободное окошко" },
+    { done: Boolean(state.master.contact), title: "Указать контакт для клиентов" },
+  ];
+  const setupProgress = setupSteps.filter((s) => s.done).length;
+
   async function updateMaster(key, value) {
-    setState((p) => ({ ...p, master: { ...p.master, [key]: value } }));
+    const nextMaster = { ...state.master, [key]: value };
+
+    setState((p) => ({ ...p, master: nextMaster }));
+    setMasters((p) => p.map((m) => (m.id === nextMaster.id ? { ...m, [key]: value } : m)));
+    if (masterAccount?.id === nextMaster.id) setMasterAccount(nextMaster);
 
     if (mode === "supabase") {
       const { error } = await supabase.from("masters").update({ [key]: value }).eq("id", state.master.id);
       if (error) showToast("Не сохранил профиль: " + error.message);
     }
+  }
+
+  async function toggleVisibility() {
+    await updateMaster("is_visible", !state.master.is_visible);
+    showToast(state.master.is_visible ? "Профиль скрыт" : "Профиль опубликован");
   }
 
   async function addService(e) {
@@ -261,9 +364,15 @@ function App() {
 
       if (error) return showToast("Ошибка: " + error.message);
       setState((p) => ({ ...p, services: [...p.services, data] }));
+    } else {
+      setState((p) => ({
+        ...p,
+        services: [...p.services, { id: makeId(), name, price, duration }],
+      }));
     }
 
     e.currentTarget.reset();
+    setMasterView("services");
     showToast("Услуга добавлена");
   }
 
@@ -275,6 +384,7 @@ function App() {
     const slot_time = String(fd.get("time"));
 
     if (!service_id || !slot_date || !slot_time) return showToast("Заполни дату и время");
+    if (!state.services.length) return showToast("Сначала добавь услугу");
 
     if (mode === "supabase") {
       const { data, error } = await supabase
@@ -284,11 +394,16 @@ function App() {
         .single();
 
       if (error) return showToast("Ошибка: " + error.message);
-      setState((p) => ({ ...p, slots: [...p.slots, data] }));
+      setState((p) => ({ ...p, slots: [...p.slots, data].sort(slotSort) }));
+    } else {
+      setState((p) => ({
+        ...p,
+        slots: [...p.slots, { id: makeId(), service_id, slot_date, slot_time, is_hot: false, is_active: true }].sort(slotSort),
+      }));
     }
 
     e.currentTarget.reset();
-    setScreen("public");
+    setMasterView("slots");
     showToast("Окошко опубликовано");
   }
 
@@ -333,7 +448,6 @@ function App() {
     return data;
   }
 
-
   async function sendTelegramNotification({ booking, slot, service }) {
     try {
       await fetch("/api/notify-booking", {
@@ -342,6 +456,7 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          masterTelegramId: state.master.telegram_id || "",
           masterName: state.master.name,
           clientName: booking.client_name,
           clientContact: booking.client_contact,
@@ -379,9 +494,42 @@ function App() {
       const note = bookingForm.note.trim();
       const client = await upsertClient(name, contact, note);
 
-      const { data, error } = await supabase
-        .from("bookings")
-        .insert({
+      let data;
+
+      if (mode === "supabase") {
+        const result = await supabase
+          .from("bookings")
+          .insert({
+            master_id: state.master.id,
+            slot_id: slot.id,
+            client_id: client.id,
+            client_name: name,
+            client_contact: contact,
+            note,
+            status: "active",
+          })
+          .select()
+          .single();
+
+        if (result.error) {
+          const isDuplicateSlot =
+            result.error.code === "23505" ||
+            String(result.error.message || "").includes("one_active_booking_per_slot") ||
+            String(result.error.details || "").includes("already exists");
+
+          if (isDuplicateSlot) {
+            setSelectedSlotId(null);
+            showToast("Это окошко уже занято. Выбери другое.");
+            return;
+          }
+
+          throw result.error;
+        }
+
+        data = result.data;
+      } else {
+        data = {
+          id: makeId(),
           master_id: state.master.id,
           slot_id: slot.id,
           client_id: client.id,
@@ -389,23 +537,8 @@ function App() {
           client_contact: contact,
           note,
           status: "active",
-        })
-        .select()
-        .single();
-
-      if (error) {
-        const isDuplicateSlot =
-          error.code === "23505" ||
-          String(error.message || "").includes("one_active_booking_per_slot") ||
-          String(error.details || "").includes("already exists");
-
-        if (isDuplicateSlot) {
-          setSelectedSlotId(null);
-          showToast("Это окошко уже занято. Выбери другое.");
-          return;
-        }
-
-        throw error;
+          created_at: new Date().toISOString(),
+        };
       }
 
       setState((p) => ({
@@ -416,11 +549,13 @@ function App() {
           : [client, ...p.clients],
       }));
 
-      await sendTelegramNotification({
-        booking: data,
-        slot,
-        service: serviceById(slot.service_id),
-      });
+      if (mode === "supabase") {
+        await sendTelegramNotification({
+          booking: data,
+          slot,
+          service: serviceById(slot.service_id),
+        });
+      }
 
       setLastBooking({
         booking: data,
@@ -429,8 +564,9 @@ function App() {
       });
 
       setSelectedSlotId(null);
-      setBookingForm({ name: "", contact: "", note: "" });
-      setScreen(role === "master" ? "bookings" : "success");
+      setBookingForm({ name: "", contact: telegramContact(telegramUser), note: "" });
+      setScreen(role === "master" ? "master" : "success");
+      setMasterView("bookings");
       showToast("Вы записаны");
     } catch (e) {
       console.error(e);
@@ -444,10 +580,16 @@ function App() {
   async function createMasterProfile(e) {
     e.preventDefault();
 
+    const tgUser = telegramUser || getTelegramUser();
+
+    if (!tgUser?.id) {
+      return showToast("Открой мини-апку через Telegram, чтобы привязать кабинет");
+    }
+
     const name = masterForm.name.trim();
     const cityValue = masterForm.city.trim();
     const about = masterForm.about.trim();
-    const contact = masterForm.contact.trim();
+    const contact = masterForm.contact.trim() || telegramContact(tgUser);
     const categoryValue = masterForm.category || "manicure";
 
     if (!name || !cityValue || !about) {
@@ -457,9 +599,22 @@ function App() {
     setIsMasterCreating(true);
 
     try {
-      const slug = makeSlug(name);
-
       if (mode === "supabase") {
+        const { data: existing, error: existingError } = await supabase
+          .from("masters")
+          .select("*")
+          .eq("telegram_id", tgUser.id)
+          .maybeSingle();
+
+        if (existingError) throw existingError;
+
+        if (existing) {
+          setMasterAccount(existing);
+          await openOwnMasterCabinet(existing);
+          showToast("Кабинет мастера открыт");
+          return;
+        }
+
         const { data, error } = await supabase
           .from("masters")
           .insert({
@@ -467,29 +622,28 @@ function App() {
             city: cityValue,
             category: categoryValue,
             about,
-            slug,
+            contact,
+            slug: makeSlug(name),
             emoji: "✨",
             rating: 5,
             reviews_count: 0,
             is_visible: true,
             is_pro: false,
+            telegram_id: tgUser.id,
+            telegram_username: tgUser.username || "",
+            telegram_first_name: tgUser.first_name || "",
           })
           .select()
           .single();
 
         if (error) throw error;
 
-        setState((p) => ({
-          ...p,
-          master: data,
-          services: [],
-          slots: [],
-          bookings: [],
-          clients: [],
-          reviews: [],
-        }));
-
-        setMasters((p) => [data, ...p]);
+        setMasterAccount(data);
+        setMasters((p) => [data, ...p.filter((m) => m.id !== data.id)]);
+        setRole("master");
+        setScreen("master");
+        setMasterView("overview");
+        await loadMaster(data.slug, false);
       } else {
         const data = {
           id: makeId(),
@@ -498,33 +652,29 @@ function App() {
           category: categoryValue,
           about,
           contact,
-          slug,
+          slug: makeSlug(name),
           emoji: "✨",
           rating: 5,
           reviews_count: 0,
           is_visible: true,
           is_pro: false,
+          telegram_id: tgUser.id,
+          telegram_username: tgUser.username || "",
+          telegram_first_name: tgUser.first_name || "",
         };
 
-        setState((p) => ({
-          ...p,
-          master: data,
-          services: [],
-          slots: [],
-          bookings: [],
-          clients: [],
-          reviews: [],
-        }));
-
-        setMasters((p) => [data, ...p]);
+        setMasterAccount(data);
+        setMasters((p) => [data, ...p.filter((m) => m.id !== data.id)]);
+        setState({ master: data, services: [], slots: [], bookings: [], clients: [], reviews: [] });
+        setRole("master");
+        setScreen("master");
+        setMasterView("overview");
       }
 
-      setRole("master");
-      setScreen("master");
       showToast("Профиль мастера создан");
     } catch (e) {
       console.error(e);
-      showToast("Не создал профиль. Попробуй другое имя.");
+      showToast("Не создал профиль. Проверь SQL-обновление в Supabase.");
     } finally {
       setIsMasterCreating(false);
     }
@@ -539,6 +689,8 @@ function App() {
       ...p,
       bookings: p.bookings.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b)),
     }));
+
+    showToast("Запись отменена");
   }
 
   async function copyLink() {
@@ -565,40 +717,28 @@ function App() {
     <div className="app">
       <header className="top glass">
         <div>
-          <p className="label">{mode === "supabase" ? "Supabase connected" : "Local demo mode"}</p>
+          <p className="label">{role === "master" ? "Кабинет мастера" : "Маркетплейс услуг"}</p>
           <h1>Окошки</h1>
-          <p className="sub">Маркетплейс свободных окошек в Telegram.</p>
+          <p className="sub">
+            {role === "master"
+              ? "Услуги, свободное время, записи и клиенты в одном месте."
+              : "Выбери мастера и свободное окошко без долгой переписки."}
+          </p>
         </div>
         <div className="logo">🪟</div>
       </header>
 
       {role === "master" && (
-        <>
-          <section className="stats">
-            <Stat title="Сегодня" value={todayBookings.length} sub="записей" />
-            <Stat title="Доход" value={money(todayIncome)} sub="за день" />
-            <Stat title="Клиенты" value={state.clients.length} sub="в базе" />
-          </section>
-
-          <nav className="tabs">
-            <Tab id="master" screen={screen} setScreen={setScreen} icon={<Plus size={19} />} />
-            <Tab id="public" screen={screen} setScreen={setScreen} icon={<Link size={19} />} />
-            <Tab id="bookings" screen={screen} setScreen={setScreen} icon={<CalendarDays size={19} />} />
-            <Tab id="clients" screen={screen} setScreen={setScreen} icon={<Users size={19} />} />
-          </nav>
-        </>
+        <MasterShell
+          master={state.master}
+          masterView={masterView}
+          setMasterView={setMasterView}
+          setRole={setRole}
+          setScreen={setScreen}
+        />
       )}
 
-      {role === "client" && screen !== "public" && screen !== "success" && (
-        <button
-          className="reset"
-          onClick={() => setScreen("become-master")}
-        >
-          Стать мастером
-        </button>
-      )}
-
-      {screen === "market" && (
+      {role === "client" && screen === "market" && (
         <main className="screen">
           <Card title="Что ищем?">
             <label>
@@ -621,22 +761,33 @@ function App() {
             </div>
           </Card>
 
-          <h3>Мастера</h3>
+          <div className="sectionTitle">
+            <h3>Мастера</h3>
+            <span>{filteredMasters.length}</span>
+          </div>
+
           <div className="cards">
             {filteredMasters.length ? filteredMasters.map((m) => (
-              <div className="item slotCard" key={m.id}>
+              <div className="item slotCard masterCard" key={m.id}>
                 <div>
                   <h4>{m.emoji || "✨"} {m.name} {m.is_pro ? "👑" : ""}</h4>
                   <p className="muted">{m.city} · ⭐ {Number(m.rating || 5).toFixed(1)} · {m.reviews_count || 0} отзывов</p>
+                  <p className="muted last">{m.about || "Мастер принимает записи через Окошки"}</p>
                 </div>
                 <button className="book" onClick={() => loadMaster(m.slug, true)}>Профиль</button>
               </div>
             )) : <Empty text="В этом городе пока нет мастеров." />}
           </div>
 
-          <Card title="Хочешь принимать записи?">
-            <p className="muted">Зарегистрируйся как мастер и добавляй свои свободные окошки.</p>
-            <button className="primary" onClick={() => setScreen("become-master")}>Стать мастером</button>
+          <Card title={masterAccount ? "Ты уже мастер" : "Хочешь принимать записи?"}>
+            <p className="muted">
+              {masterAccount
+                ? "Открой свой кабинет, чтобы добавить услуги, окошки и посмотреть записи."
+                : "Зарегистрируйся как мастер и добавляй свободные окошки для клиентов."}
+            </p>
+            <button className="primary" onClick={() => masterAccount ? openOwnMasterCabinet() : setScreen("become-master")}>
+              {masterAccount ? "Открыть кабинет мастера" : "Стать мастером"}
+            </button>
           </Card>
         </main>
       )}
@@ -655,7 +806,9 @@ function App() {
 
           <h3>Услуги</h3>
           <div className="chips">
-            {state.services.map((s) => <span className="chip" key={s.id}>{s.name} · {money(s.price)}</span>)}
+            {state.services.length
+              ? state.services.map((s) => <span className="chip" key={s.id}>{s.name} · {money(s.price)}</span>)
+              : <span className="chip">Услуги пока не добавлены</span>}
           </div>
 
           <h3>Свободные окошки</h3>
@@ -684,17 +837,33 @@ function App() {
               </div>
             )) : <Empty text="Пока отзывов нет." />}
           </div>
+
+          <button className="reset" onClick={() => setScreen("market")}>Назад к каталогу</button>
         </main>
       )}
-
-
 
       {screen === "become-master" && role === "client" && (
         <main className="screen">
           <Card title="Стать мастером">
             <p className="muted">
-              Создай профиль, добавь услуги и свободные окошки. Клиенты смогут находить тебя в каталоге и записываться без переписки.
+              Создай профиль, добавь услуги и свободные окошки. Кабинет привяжется к твоему Telegram-аккаунту.
             </p>
+
+            {telegramUser ? (
+              <div className="item">
+                <h4>Telegram привязан</h4>
+                <p className="muted last">
+                  {telegramUser.username ? `@${telegramUser.username}` : telegramUser.first_name} · ID {telegramUser.id}
+                </p>
+              </div>
+            ) : (
+              <div className="item">
+                <h4>Открой через Telegram</h4>
+                <p className="muted last">
+                  Для регистрации мастера нужен Telegram ID. В обычном браузере кабинет не привяжется.
+                </p>
+              </div>
+            )}
 
             <form className="form" onSubmit={createMasterProfile}>
               <input
@@ -733,7 +902,7 @@ function App() {
                 onChange={(e) => setMasterForm({ ...masterForm, contact: e.target.value })}
               />
 
-              <button className="primary" disabled={isMasterCreating}>
+              <button className="primary" disabled={isMasterCreating || !telegramUser}>
                 {isMasterCreating ? "Создаём..." : "Зарегистрироваться как мастер"}
               </button>
             </form>
@@ -765,91 +934,213 @@ function App() {
       )}
 
       {screen === "master" && role === "master" && (
-        <main className="screen">
-          <Card title="Профиль">
-            <div className="form">
-              <Input label="Имя мастера / студии" value={state.master.name} onChange={(v) => updateMaster("name", v)} />
-              <Input label="Город" value={state.master.city || ""} onChange={(v) => updateMaster("city", v)} />
-              <label>
-                Категория
-                <select value={state.master.category || "manicure"} onChange={(e) => updateMaster("category", e.target.value)}>
-                  {categories.filter((c) => c.slug !== "all").map((c) => <option value={c.slug} key={c.slug}>{c.emoji} {c.name}</option>)}
-                </select>
-              </label>
-              <Input label="Описание" value={state.master.about || ""} onChange={(v) => updateMaster("about", v)} />
-              <Input label="Ссылка" value={state.master.slug || ""} onChange={(v) => updateMaster("slug", v.replaceAll(" ", "_").toLowerCase())} />
-              <Input label="Эмодзи" value={state.master.emoji || ""} onChange={(v) => updateMaster("emoji", v)} />
-            </div>
-          </Card>
+        <main className="screen masterScreen">
+          {masterView === "overview" && (
+            <>
+              <section className="stats">
+                <Stat title="Сегодня" value={todayBookings.length} sub="записей" />
+                <Stat title="Доход" value={money(todayIncome)} sub="сегодня" />
+                <Stat title="Свободно" value={freeSlots.length} sub="окошек" />
+              </section>
 
-          <Card title="Добавить услугу">
-            <form className="form" onSubmit={addService}>
-              <input name="name" placeholder="Маникюр + покрытие" />
-              <div className="two">
-                <input name="price" type="number" placeholder="Цена" />
-                <input name="duration" type="number" placeholder="Минут" />
-              </div>
-              <button className="primary">Добавить услугу</button>
-            </form>
-          </Card>
-
-          <Card title="Добавить окошко">
-            <form className="form" onSubmit={addSlot}>
-              <select name="service_id">
-                {state.services.map((s) => <option value={s.id} key={s.id}>{s.name} · {money(s.price)}</option>)}
-              </select>
-              <div className="two">
-                <input name="date" type="date" />
-                <input name="time" type="time" />
-              </div>
-              <button className="primary">Опубликовать</button>
-            </form>
-          </Card>
-        </main>
-      )}
-
-      {screen === "bookings" && role === "master" && (
-        <main className="screen">
-          <Card title="Записи">
-            <div className="cards">
-              {activeBookings.length ? activeBookings.map((b) => {
-                const slot = slotById(b.slot_id);
-                const service = serviceById(slot?.service_id);
-                return (
-                  <div className="item" key={b.id}>
-                    <h4>💬 {b.client_name}</h4>
-                    <p className="muted">{b.client_contact}{b.note ? ` · ${b.note}` : ""}</p>
-                    <div className="row">
-                      <span className="pill">{service?.name}</span>
-                      <span className="pill">📅 {dateHuman(slot?.slot_date)}</span>
-                      <span className="pill">⏰ {normalizeTime(slot?.slot_time)}</span>
-                      <span className="pill">{money(service?.price)}</span>
-                    </div>
-                    <button className="mini red" onClick={() => cancelBooking(b.id)}>Отменить запись</button>
-                  </div>
-                );
-              }) : <Empty text="Пока записей нет." />}
-            </div>
-          </Card>
-        </main>
-      )}
-
-      {screen === "clients" && role === "master" && (
-        <main className="screen">
-          <Card title="Клиенты">
-            <div className="cards">
-              {state.clients.length ? state.clients.map((c) => (
-                <div className="item" key={c.id}>
-                  <h4>{c.visits >= 3 ? "💎 " : "👤 "}{c.name}</h4>
-                  <p className="muted">{c.contact}{c.note ? ` · ${c.note}` : ""}</p>
-                  <div className="row">
-                    <span className="pill">{c.visits} посещ.</span>
-                    <span className="pill">{c.visits >= 3 ? "VIP" : "новый"}</span>
-                  </div>
+              <Card title="Что сейчас важно">
+                <div className="progressLine">
+                  <div style={{ width: `${(setupProgress / setupSteps.length) * 100}%` }} />
                 </div>
-              )) : <Empty text="База клиентов появится после первых записей." />}
-            </div>
-          </Card>
+                <p className="muted">Готовность кабинета: {setupProgress} из {setupSteps.length}</p>
+
+                <div className="checkList">
+                  {setupSteps.map((step) => (
+                    <div className={step.done ? "check done" : "check"} key={step.title}>
+                      <span>{step.done ? "✅" : "○"}</span>
+                      <p>{step.title}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="quickGrid">
+                  <button className="primary" onClick={() => setMasterView("slots")}>Добавить окошко</button>
+                  <button className="secondary" onClick={() => setMasterView("services")}>Услуги</button>
+                </div>
+              </Card>
+
+              <Card title="Ближайшие записи">
+                <div className="cards">
+                  {activeBookings.slice(0, 3).length ? activeBookings.slice(0, 3).map((b) => {
+                    const slot = slotById(b.slot_id);
+                    const service = serviceById(slot?.service_id);
+                    return (
+                      <div className="item" key={b.id}>
+                        <h4>💬 {b.client_name}</h4>
+                        <p className="muted">{service?.name} · {dateHuman(slot?.slot_date)} · {normalizeTime(slot?.slot_time)}</p>
+                        <p className="muted last">{b.client_contact}</p>
+                      </div>
+                    );
+                  }) : <Empty text="Пока нет записей. Опубликуй окошко и поделись профилем." />}
+                </div>
+              </Card>
+
+              <Card title="Подписка">
+                <div className="item">
+                  <h4>Trial / тестовый режим</h4>
+                  <p className="muted last">Оплату пока не включаем. Здесь позже будет тариф, остаток дней и кнопка продления.</p>
+                </div>
+              </Card>
+            </>
+          )}
+
+          {masterView === "services" && (
+            <>
+              <Card title="Мои услуги">
+                <div className="cards">
+                  {state.services.length ? state.services.map((s) => (
+                    <div className="item slotCard" key={s.id}>
+                      <div>
+                        <h4>{s.name}</h4>
+                        <p className="muted last">{money(s.price)} · {s.duration} мин.</p>
+                      </div>
+                    </div>
+                  )) : <Empty text="Услуг пока нет. Добавь первую услугу ниже." />}
+                </div>
+              </Card>
+
+              <Card title="Добавить услугу">
+                <form className="form" onSubmit={addService}>
+                  <input name="name" placeholder="Маникюр + покрытие" />
+                  <div className="two">
+                    <input name="price" type="number" placeholder="Цена" />
+                    <input name="duration" type="number" placeholder="Минут" />
+                  </div>
+                  <button className="primary">Добавить услугу</button>
+                </form>
+              </Card>
+            </>
+          )}
+
+          {masterView === "slots" && (
+            <>
+              <Card title="Опубликовать окошко">
+                <form className="form" onSubmit={addSlot}>
+                  <select name="service_id" disabled={!state.services.length}>
+                    {state.services.length
+                      ? state.services.map((s) => <option value={s.id} key={s.id}>{s.name} · {money(s.price)}</option>)
+                      : <option>Сначала добавь услугу</option>}
+                  </select>
+                  <div className="two">
+                    <input name="date" type="date" defaultValue={todayISO} />
+                    <input name="time" type="time" />
+                  </div>
+                  <button className="primary" disabled={!state.services.length}>Опубликовать</button>
+                </form>
+              </Card>
+
+              <Card title="Свободные окошки">
+                <div className="cards">
+                  {freeSlots.length ? freeSlots.map((slot) => (
+                    <div className="item slotCard" key={slot.id}>
+                      <div>
+                        <h4>{serviceById(slot.service_id)?.name}</h4>
+                        <p className="muted last">{dateHuman(slot.slot_date)} · {normalizeTime(slot.slot_time)} · {money(serviceById(slot.service_id)?.price)}</p>
+                      </div>
+                      <span className="status ok">свободно</span>
+                    </div>
+                  )) : <Empty text="Нет свободных окошек." />}
+                </div>
+              </Card>
+
+              <Card title="Занятые окошки">
+                <div className="cards">
+                  {busySlots.length ? busySlots.map((slot) => (
+                    <div className="item slotCard" key={slot.id}>
+                      <div>
+                        <h4>{serviceById(slot.service_id)?.name}</h4>
+                        <p className="muted last">{dateHuman(slot.slot_date)} · {normalizeTime(slot.slot_time)}</p>
+                      </div>
+                      <span className="status busy">занято</span>
+                    </div>
+                  )) : <Empty text="Пока нет занятых окошек." />}
+                </div>
+              </Card>
+            </>
+          )}
+
+          {masterView === "bookings" && (
+            <Card title="Записи">
+              <div className="cards">
+                {activeBookings.length ? activeBookings.map((b) => {
+                  const slot = slotById(b.slot_id);
+                  const service = serviceById(slot?.service_id);
+                  return (
+                    <div className="item" key={b.id}>
+                      <h4>💬 {b.client_name}</h4>
+                      <p className="muted">{b.client_contact}{b.note ? ` · ${b.note}` : ""}</p>
+                      <div className="row">
+                        <span className="pill">{service?.name}</span>
+                        <span className="pill">📅 {dateHuman(slot?.slot_date)}</span>
+                        <span className="pill">⏰ {normalizeTime(slot?.slot_time)}</span>
+                        <span className="pill">{money(service?.price)}</span>
+                      </div>
+                      <button className="mini red" onClick={() => cancelBooking(b.id)}>Отменить запись</button>
+                    </div>
+                  );
+                }) : <Empty text="Пока записей нет." />}
+              </div>
+            </Card>
+          )}
+
+          {masterView === "clients" && (
+            <Card title="Клиенты">
+              <div className="cards">
+                {state.clients.length ? state.clients.map((c) => (
+                  <div className="item" key={c.id}>
+                    <h4>{c.visits >= 3 ? "💎 " : "👤 "}{c.name}</h4>
+                    <p className="muted">{c.contact}{c.note ? ` · ${c.note}` : ""}</p>
+                    <div className="row">
+                      <span className="pill">{c.visits} посещ.</span>
+                      <span className="pill">{c.visits >= 3 ? "VIP" : "новый"}</span>
+                    </div>
+                  </div>
+                )) : <Empty text="База клиентов появится после первых записей." />}
+              </div>
+            </Card>
+          )}
+
+          {masterView === "profile" && (
+            <>
+              <Card title="Профиль мастера">
+                <div className="form">
+                  <Input label="Имя мастера / студии" value={state.master.name || ""} onChange={(v) => updateMaster("name", v)} />
+                  <Input label="Город" value={state.master.city || ""} onChange={(v) => updateMaster("city", v)} />
+                  <label>
+                    Категория
+                    <select value={state.master.category || "manicure"} onChange={(e) => updateMaster("category", e.target.value)}>
+                      {categories.filter((c) => c.slug !== "all").map((c) => <option value={c.slug} key={c.slug}>{c.emoji} {c.name}</option>)}
+                    </select>
+                  </label>
+                  <Input label="Описание" value={state.master.about || ""} onChange={(v) => updateMaster("about", v)} />
+                  <Input label="Контакт" value={state.master.contact || ""} onChange={(v) => updateMaster("contact", v)} />
+                  <Input label="Ссылка" value={state.master.slug || ""} onChange={(v) => updateMaster("slug", v.replaceAll(" ", "_").toLowerCase())} />
+                  <Input label="Эмодзи" value={state.master.emoji || ""} onChange={(v) => updateMaster("emoji", v)} />
+                </div>
+              </Card>
+
+              <Card title="Публичная карточка">
+                <div className="item">
+                  <h4>{state.master.is_visible === false ? "Скрыта" : "Опубликована"}</h4>
+                  <p className="muted last">
+                    Клиенты видят тебя в каталоге города {state.master.city || "—"}.
+                  </p>
+                </div>
+                <div className="quickGrid">
+                  <button className="primary" onClick={copyLink}>Скопировать ссылку</button>
+                  <button className="secondary" onClick={() => { setRole("client"); setScreen("public"); }}>Посмотреть как клиент</button>
+                </div>
+                <button className="reset" onClick={toggleVisibility}>
+                  {state.master.is_visible === false ? "Опубликовать профиль" : "Скрыть профиль"}
+                </button>
+              </Card>
+            </>
+          )}
         </main>
       )}
 
@@ -872,8 +1163,33 @@ function App() {
       )}
 
       {toast && <div className="toast">{toast}</div>}
-      {role === "master" && <footer><button className="reset" onClick={() => loadEverything()}>Обновить из базы</button></footer>}
     </div>
+  );
+}
+
+function MasterShell({ master, masterView, setMasterView, setRole, setScreen }) {
+  return (
+    <>
+      <section className="masterHero glass">
+        <div>
+          <p className="label">Мой кабинет</p>
+          <h2>{master.emoji || "✨"} {master.name || "Мастер"}</h2>
+          <p className="muted">{master.city || "Город не указан"} · {master.is_visible === false ? "профиль скрыт" : "профиль опубликован"}</p>
+        </div>
+        <button className="mini" onClick={() => { setRole("client"); setScreen("market"); }}>
+          Каталог
+        </button>
+      </section>
+
+      <nav className="tabs masterTabs">
+        <Tab id="overview" screen={masterView} setScreen={setMasterView} icon={<Home size={17} />} label="Обзор" />
+        <Tab id="services" screen={masterView} setScreen={setMasterView} icon={<Plus size={17} />} label="Услуги" />
+        <Tab id="slots" screen={masterView} setScreen={setMasterView} icon={<CalendarDays size={17} />} label="Окошки" />
+        <Tab id="bookings" screen={masterView} setScreen={setMasterView} icon={<Link size={17} />} label="Записи" />
+        <Tab id="clients" screen={masterView} setScreen={setMasterView} icon={<Users size={17} />} label="Клиенты" />
+        <Tab id="profile" screen={masterView} setScreen={setMasterView} icon={<Home size={17} />} label="Профиль" />
+      </nav>
+    </>
   );
 }
 
@@ -881,8 +1197,13 @@ function Stat({ title, value, sub }) {
   return <div className="stat glass"><span>{title}</span><b>{value}</b><small>{sub}</small></div>;
 }
 
-function Tab({ id, screen, setScreen, icon }) {
-  return <button className={screen === id ? "tab active" : "tab"} onClick={() => setScreen(id)}>{icon}</button>;
+function Tab({ id, screen, setScreen, icon, label }) {
+  return (
+    <button className={screen === id ? "tab active" : "tab"} onClick={() => setScreen(id)}>
+      {icon}
+      {label ? <span>{label}</span> : null}
+    </button>
+  );
 }
 
 function Card({ title, children }) {
