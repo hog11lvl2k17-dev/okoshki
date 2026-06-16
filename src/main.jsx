@@ -82,6 +82,8 @@ const demoState = {
     rating: 5,
     reviews_count: 2,
     contact: "@anna_okoshki",
+    avatar_url: "",
+    cover_url: "",
     telegram_id: "",
   },
   services: demoServices,
@@ -91,6 +93,16 @@ const demoState = {
   bookings: [],
   clients: [],
   reviews: [],
+  photos: [
+    {
+      id: "demo-work-1",
+      master_id: "local-master",
+      image_url: "",
+      title: "Пример работы",
+      description: "Здесь мастер сможет публиковать свои работы как мини-ленту.",
+      created_at: new Date().toISOString(),
+    },
+  ],
 };
 
 const demoCategories = [
@@ -109,6 +121,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState("market");
   const [masterView, setMasterView] = useState("overview");
+  const [publicTab, setPublicTab] = useState("slots");
   const [state, setState] = useState(demoState);
   const [masters, setMasters] = useState([demoState.master]);
   const [categories, setCategories] = useState(demoCategories);
@@ -262,12 +275,14 @@ function App() {
       { data: bookings },
       { data: clients },
       { data: reviews },
+      { data: photos },
     ] = await Promise.all([
       supabase.from("services").select("*").eq("master_id", master.id).order("created_at"),
       supabase.from("slots").select("*").eq("master_id", master.id).eq("is_active", true).order("slot_date").order("slot_time"),
       supabase.from("bookings").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
       supabase.from("clients").select("*").eq("master_id", master.id).order("last_visit_at", { ascending: false }),
       supabase.from("reviews").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
+      supabase.from("master_photos").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
     ]);
 
     setState({
@@ -277,6 +292,7 @@ function App() {
       bookings: bookings || [],
       clients: clients || [],
       reviews: reviews || [],
+      photos: photos || [],
     });
 
     if (telegramUser?.id && String(master.telegram_id || "") === telegramUser.id) {
@@ -325,8 +341,58 @@ function App() {
     { done: state.services.length > 0, title: "Добавить хотя бы одну услугу" },
     { done: freeSlots.length > 0, title: "Опубликовать свободное окошко" },
     { done: Boolean(state.master.contact), title: "Указать контакт для клиентов" },
+    { done: (state.photos || []).length > 0, title: "Добавить пример работы" },
   ];
   const setupProgress = setupSteps.filter((s) => s.done).length;
+
+
+  async function addWork(e) {
+    e.preventDefault();
+
+    const fd = new FormData(e.currentTarget);
+    const image_url = String(fd.get("image_url") || "").trim();
+    const title = String(fd.get("title") || "").trim();
+    const description = String(fd.get("description") || "").trim();
+
+    if (!image_url && !title && !description) {
+      return showToast("Добавь фото, название или описание работы");
+    }
+
+    if (mode === "supabase") {
+      const { data, error } = await supabase
+        .from("master_photos")
+        .insert({
+          master_id: state.master.id,
+          image_url,
+          title: title || "Моя работа",
+          description,
+        })
+        .select()
+        .single();
+
+      if (error) return showToast("Не добавил работу: " + error.message);
+      setState((p) => ({ ...p, photos: [data, ...(p.photos || [])] }));
+    } else {
+      setState((p) => ({
+        ...p,
+        photos: [
+          {
+            id: makeId(),
+            master_id: state.master.id,
+            image_url,
+            title: title || "Моя работа",
+            description,
+            created_at: new Date().toISOString(),
+          },
+          ...(p.photos || []),
+        ],
+      }));
+    }
+
+    e.currentTarget.reset();
+    setMasterView("works");
+    showToast("Работа добавлена");
+  }
 
   async function updateMaster(key, value) {
     const nextMaster = { ...state.master, [key]: value };
@@ -623,6 +689,8 @@ function App() {
             category: categoryValue,
             about,
             contact,
+            avatar_url: "",
+            cover_url: "",
             slug: makeSlug(name),
             emoji: "✨",
             rating: 5,
@@ -652,6 +720,8 @@ function App() {
           category: categoryValue,
           about,
           contact,
+          avatar_url: "",
+          cover_url: "",
           slug: makeSlug(name),
           emoji: "✨",
           rating: 5,
@@ -665,7 +735,7 @@ function App() {
 
         setMasterAccount(data);
         setMasters((p) => [data, ...p.filter((m) => m.id !== data.id)]);
-        setState({ master: data, services: [], slots: [], bookings: [], clients: [], reviews: [] });
+        setState({ master: data, services: [], slots: [], bookings: [], clients: [], reviews: [], photos: [] });
         setRole("master");
         setScreen("master");
         setMasterView("overview");
@@ -769,8 +839,9 @@ function App() {
           <div className="cards">
             {filteredMasters.length ? filteredMasters.map((m) => (
               <div className="item slotCard masterCard" key={m.id}>
-                <div>
-                  <h4>{m.emoji || "✨"} {m.name} {m.is_pro ? "👑" : ""}</h4>
+                <Avatar master={m} />
+                <div className="masterCardBody">
+                  <h4>{m.name} {m.is_pro ? "👑" : ""}</h4>
                   <p className="muted">{m.city} · ⭐ {Number(m.rating || 5).toFixed(1)} · {m.reviews_count || 0} отзывов</p>
                   <p className="muted last">{m.about || "Мастер принимает записи через Окошки"}</p>
                 </div>
@@ -794,8 +865,8 @@ function App() {
 
       {screen === "public" && (
         <main className="screen">
-          <div className="profile glass">
-            <div className="photo">{state.master.emoji || "✨"}</div>
+          <div className="profile glass profileCover" style={state.master.cover_url ? { backgroundImage: `linear-gradient(180deg, rgba(25,18,18,.22), rgba(25,18,18,.72)), url(${state.master.cover_url})` } : undefined}>
+            <Avatar master={state.master} big />
             <div>
               <p className="muted">Профиль мастера · {state.master.city}</p>
               <h2>{state.master.name}</h2>
@@ -804,39 +875,64 @@ function App() {
             </div>
           </div>
 
-          <h3>Услуги</h3>
-          <div className="chips">
-            {state.services.length
-              ? state.services.map((s) => <span className="chip" key={s.id}>{s.name} · {money(s.price)}</span>)
-              : <span className="chip">Услуги пока не добавлены</span>}
+          <div className="publicTabs">
+            <button className={publicTab === "slots" ? "publicTab active" : "publicTab"} onClick={() => setPublicTab("slots")}>Окошки</button>
+            <button className={publicTab === "works" ? "publicTab active" : "publicTab"} onClick={() => setPublicTab("works")}>Работы</button>
+            <button className={publicTab === "reviews" ? "publicTab active" : "publicTab"} onClick={() => setPublicTab("reviews")}>Отзывы</button>
           </div>
 
-          <h3>Свободные окошки</h3>
-          <div className="cards">
-            {freeSlots.length ? freeSlots.map((slot) => (
-              <div className="item slotCard" key={slot.id}>
-                <div>
-                  <h4>{serviceById(slot.service_id)?.name}</h4>
-                  <div className="row">
-                    <span className="pill">📅 {dateHuman(slot.slot_date)}</span>
-                    <span className="pill">⏰ {normalizeTime(slot.slot_time)}</span>
-                    <span className="pill">{money(serviceById(slot.service_id)?.price)}</span>
+          {publicTab === "slots" && (
+            <>
+              <h3>Услуги</h3>
+              <div className="chips">
+                {state.services.length
+                  ? state.services.map((s) => <span className="chip" key={s.id}>{s.name} · {money(s.price)}</span>)
+                  : <span className="chip">Услуги пока не добавлены</span>}
+              </div>
+
+              <h3>Свободные окошки</h3>
+              <div className="cards">
+                {freeSlots.length ? freeSlots.map((slot) => (
+                  <div className="item slotCard" key={slot.id}>
+                    <div>
+                      <h4>{serviceById(slot.service_id)?.name}</h4>
+                      <div className="row">
+                        <span className="pill">📅 {dateHuman(slot.slot_date)}</span>
+                        <span className="pill">⏰ {normalizeTime(slot.slot_time)}</span>
+                        <span className="pill">{money(serviceById(slot.service_id)?.price)}</span>
+                      </div>
+                    </div>
+                    <button className="book" onClick={() => setSelectedSlotId(slot.id)}>Записаться</button>
                   </div>
-                </div>
-                <button className="book" onClick={() => setSelectedSlotId(slot.id)}>Записаться</button>
+                )) : <Empty text="Свободных окошек пока нет." />}
               </div>
-            )) : <Empty text="Свободных окошек пока нет." />}
-          </div>
+            </>
+          )}
 
-          <h3>Отзывы</h3>
-          <div className="cards">
-            {state.reviews?.length ? state.reviews.map((r) => (
-              <div className="item" key={r.id}>
-                <h4>⭐ {r.rating} · {r.client_name}</h4>
-                <p className="muted last">{r.text || "Без текста"}</p>
+          {publicTab === "works" && (
+            <>
+              <h3>Примеры работ</h3>
+              <div className="feed">
+                {state.photos?.length ? state.photos.map((p) => (
+                  <WorkPost work={p} key={p.id} />
+                )) : <Empty text="Мастер пока не добавил работы." />}
               </div>
-            )) : <Empty text="Пока отзывов нет." />}
-          </div>
+            </>
+          )}
+
+          {publicTab === "reviews" && (
+            <>
+              <h3>Отзывы</h3>
+              <div className="cards">
+                {state.reviews?.length ? state.reviews.map((r) => (
+                  <div className="item" key={r.id}>
+                    <h4>⭐ {r.rating} · {r.client_name}</h4>
+                    <p className="muted last">{r.text || "Без текста"}</p>
+                  </div>
+                )) : <Empty text="Пока отзывов нет." />}
+              </div>
+            </>
+          )}
 
           <button className="reset" onClick={() => setScreen("market")}>Назад к каталогу</button>
         </main>
@@ -960,7 +1056,7 @@ function App() {
 
                 <div className="quickGrid">
                   <button className="primary" onClick={() => setMasterView("slots")}>Добавить окошко</button>
-                  <button className="secondary" onClick={() => setMasterView("services")}>Услуги</button>
+                  <button className="secondary" onClick={() => setMasterView("works")}>Добавить работу</button>
                 </div>
               </Card>
 
@@ -1064,6 +1160,31 @@ function App() {
             </>
           )}
 
+
+          {masterView === "works" && (
+            <>
+              <Card title="Мои работы">
+                <div className="feed">
+                  {state.photos?.length ? state.photos.map((p) => (
+                    <WorkPost work={p} key={p.id} />
+                  )) : <Empty text="Работ пока нет. Добавь первую работу ниже." />}
+                </div>
+              </Card>
+
+              <Card title="Добавить работу">
+                <form className="form" onSubmit={addWork}>
+                  <input name="image_url" placeholder="Ссылка на фото работы" />
+                  <input name="title" placeholder="Название, например: Нюдовый маникюр" />
+                  <input name="description" placeholder="Описание / материалы / цена / детали" />
+                  <button className="primary">Опубликовать работу</button>
+                </form>
+                <p className="muted hint">
+                  Сейчас добавляем фото ссылкой. Позже подключим нормальную загрузку изображений через Supabase Storage.
+                </p>
+              </Card>
+            </>
+          )}
+
           {masterView === "bookings" && (
             <Card title="Записи">
               <div className="cards">
@@ -1119,6 +1240,8 @@ function App() {
                   </label>
                   <Input label="Описание" value={state.master.about || ""} onChange={(v) => updateMaster("about", v)} />
                   <Input label="Контакт" value={state.master.contact || ""} onChange={(v) => updateMaster("contact", v)} />
+                  <Input label="Аватарка: ссылка на фото" value={state.master.avatar_url || ""} onChange={(v) => updateMaster("avatar_url", v)} />
+                  <Input label="Обложка: ссылка на фото" value={state.master.cover_url || ""} onChange={(v) => updateMaster("cover_url", v)} />
                   <Input label="Ссылка" value={state.master.slug || ""} onChange={(v) => updateMaster("slug", v.replaceAll(" ", "_").toLowerCase())} />
                   <Input label="Эмодзи" value={state.master.emoji || ""} onChange={(v) => updateMaster("emoji", v)} />
                 </div>
@@ -1185,11 +1308,43 @@ function MasterShell({ master, masterView, setMasterView, setRole, setScreen }) 
         <Tab id="overview" screen={masterView} setScreen={setMasterView} icon={<Home size={17} />} label="Обзор" />
         <Tab id="services" screen={masterView} setScreen={setMasterView} icon={<Plus size={17} />} label="Услуги" />
         <Tab id="slots" screen={masterView} setScreen={setMasterView} icon={<CalendarDays size={17} />} label="Окошки" />
+        <Tab id="works" screen={masterView} setScreen={setMasterView} icon={<Home size={17} />} label="Работы" />
         <Tab id="bookings" screen={masterView} setScreen={setMasterView} icon={<Link size={17} />} label="Записи" />
         <Tab id="clients" screen={masterView} setScreen={setMasterView} icon={<Users size={17} />} label="Клиенты" />
         <Tab id="profile" screen={masterView} setScreen={setMasterView} icon={<Home size={17} />} label="Профиль" />
       </nav>
     </>
+  );
+}
+
+
+function Avatar({ master, big = false }) {
+  const cls = big ? "avatar big" : "avatar";
+
+  if (master?.avatar_url) {
+    return (
+      <div className={cls}>
+        <img src={master.avatar_url} alt={master.name || "Мастер"} />
+      </div>
+    );
+  }
+
+  return <div className={cls}>{master?.emoji || "✨"}</div>;
+}
+
+function WorkPost({ work }) {
+  return (
+    <article className="workPost">
+      {work.image_url ? (
+        <img className="workImage" src={work.image_url} alt={work.title || "Работа мастера"} />
+      ) : (
+        <div className="workImage placeholder">🖼️</div>
+      )}
+      <div className="workBody">
+        <h4>{work.title || "Работа мастера"}</h4>
+        {work.description ? <p className="muted last">{work.description}</p> : null}
+      </div>
+    </article>
   );
 }
 

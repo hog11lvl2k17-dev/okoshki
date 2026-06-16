@@ -3,15 +3,19 @@
 }
 
 :root {
-  --bg: #f6efe7;
-  --card: rgba(255, 255, 255, 0.78);
-  --text: #211d1a;
-  --muted: #82776d;
-  --line: rgba(30, 24, 19, 0.08);
-  --dark: #211d1a;
-  --soft: #efe6dc;
-  --good: #e7f8eb;
-  --busy: #fff0e7;
+  --bg: #171313;
+  --card: rgba(39, 31, 31, 0.82);
+  --card2: rgba(255, 255, 255, 0.07);
+  --text: #fff7ef;
+  --muted: #b9aaa2;
+  --line: rgba(255, 255, 255, 0.10);
+  --dark: #fff0df;
+  --darkText: #211716;
+  --accent: #ffb6a3;
+  --accent2: #d9b08c;
+  --soft: rgba(255, 255, 255, 0.08);
+  --good: rgba(64, 184, 113, 0.18);
+  --busy: rgba(255, 151, 92, 0.18);
 }
 
 body {
@@ -19,9 +23,9 @@ body {
   min-height: 100vh;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(255, 210, 169, 0.95), transparent 34%),
-    radial-gradient(circle at 85% 0%, rgba(255, 244, 221, 1), transparent 38%),
-    var(--bg);
+    radial-gradient(circle at 15% 0%, rgba(154, 76, 66, 0.40), transparent 34%),
+    radial-gradient(circle at 88% 8%, rgba(222, 158, 116, 0.22), transparent 36%),
+    linear-gradient(180deg, #211717 0%, #151111 55%, #0f0d0d 100%);
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -43,8 +47,8 @@ button {
 
 .glass {
   background: var(--card);
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow: 0 18px 55px rgba(54, 38, 24, 0.10);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
 }
 
@@ -59,21 +63,36 @@ button {
 }
 
 .logo,
-.photo {
+.photo,
+.avatar {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
   width: 58px;
   height: 58px;
   border-radius: 22px;
-  background: #fff;
+  background: linear-gradient(135deg, rgba(255, 182, 163, 0.35), rgba(255, 255, 255, 0.10));
   font-size: 30px;
-  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.avatar.big {
+  width: 72px;
+  height: 72px;
+  border-radius: 26px;
+  font-size: 36px;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .label {
   margin: 0 0 4px;
-  color: #9b7d5d;
+  color: var(--accent2);
   font-size: 12px;
   font-weight: 850;
   letter-spacing: 0.06em;
@@ -124,6 +143,11 @@ h4 {
   margin-bottom: 0;
 }
 
+.hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
 .screen {
   display: grid;
   gap: 12px;
@@ -148,6 +172,13 @@ h4 {
   display: flex;
   gap: 14px;
   align-items: center;
+}
+
+.profileCover {
+  min-height: 170px;
+  align-items: end;
+  background-size: cover;
+  background-position: center;
 }
 
 .masterHero {
@@ -188,7 +219,8 @@ h4 {
   letter-spacing: -0.04em;
 }
 
-.tabs {
+.tabs,
+.publicTabs {
   display: flex;
   gap: 8px;
   overflow-x: auto;
@@ -196,18 +228,20 @@ h4 {
   scrollbar-width: none;
 }
 
-.tabs::-webkit-scrollbar {
+.tabs::-webkit-scrollbar,
+.publicTabs::-webkit-scrollbar {
   display: none;
 }
 
-.tab {
+.tab,
+.publicTab {
   flex: 0 0 auto;
   min-width: 58px;
   border: 0;
   border-radius: 18px;
   padding: 11px 12px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.64);
+  background: rgba(255, 255, 255, 0.08);
   font-weight: 850;
   display: inline-flex;
   align-items: center;
@@ -223,10 +257,15 @@ h4 {
   font-size: 13px;
 }
 
-.tab.active {
-  color: #fff;
+.tab.active,
+.publicTab.active {
+  color: var(--darkText);
   background: var(--dark);
-  box-shadow: 0 12px 25px rgba(33, 29, 26, 0.20);
+  box-shadow: 0 12px 25px rgba(255, 185, 158, 0.16);
+}
+
+.publicTab {
+  min-width: 100px;
 }
 
 label {
@@ -243,15 +282,23 @@ select {
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 14px 15px;
-  background: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text);
   outline: none;
 }
 
+select option {
+  color: #1d1717;
+}
+
+input::placeholder {
+  color: rgba(255, 247, 239, 0.45);
+}
+
 input:focus,
 select:focus {
-  border-color: rgba(33, 29, 26, 0.32);
-  box-shadow: 0 0 0 4px rgba(33, 29, 26, 0.06);
+  border-color: rgba(255, 182, 163, 0.55);
+  box-shadow: 0 0 0 4px rgba(255, 182, 163, 0.10);
 }
 
 .form {
@@ -282,26 +329,28 @@ select:focus {
   border: 0;
   border-radius: 999px;
   padding: 10px 12px;
-  background: #fff;
-  color: #675d54;
+  background: rgba(255, 255, 255, 0.09);
+  color: #e9d9d0;
   font-weight: 800;
   font-size: 13px;
 }
 
 .chip.active {
-  color: #fff;
+  color: var(--darkText);
   background: var(--dark);
 }
 
-.cards {
+.cards,
+.feed {
   display: grid;
   gap: 10px;
 }
 
-.item {
+.item,
+.workPost {
   border-radius: 24px;
   padding: 15px;
-  background: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.065);
   border: 1px solid var(--line);
 }
 
@@ -313,7 +362,35 @@ select:focus {
 }
 
 .masterCard {
-  align-items: flex-start;
+  align-items: center;
+}
+
+.masterCardBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.workPost {
+  overflow: hidden;
+  padding: 0;
+}
+
+.workImage {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: cover;
+  background: linear-gradient(135deg, rgba(255, 182, 163, 0.18), rgba(255, 255, 255, 0.08));
+}
+
+.workImage.placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 42px;
+}
+
+.workBody {
+  padding: 15px;
 }
 
 .book,
@@ -335,12 +412,12 @@ select:focus {
 
 .primary {
   background: var(--dark);
-  color: white;
-  box-shadow: 0 14px 28px rgba(33, 29, 26, 0.22);
+  color: var(--darkText);
+  box-shadow: 0 14px 28px rgba(255, 185, 158, 0.16);
 }
 
 .secondary {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.09);
   color: var(--text);
   border: 1px solid var(--line);
 }
@@ -357,14 +434,14 @@ select:focus {
   border-radius: 16px;
   padding: 11px 13px;
   background: var(--dark);
-  color: white;
+  color: var(--darkText);
   white-space: nowrap;
 }
 
 .mini.red {
   margin-top: 12px;
-  background: #ffe5dc;
-  color: #9d2d17;
+  background: rgba(255, 109, 90, 0.16);
+  color: #ffb5a8;
 }
 
 .reset {
@@ -387,7 +464,7 @@ select:focus {
   overflow: hidden;
   height: 10px;
   border-radius: 999px;
-  background: rgba(33, 29, 26, 0.08);
+  background: rgba(255, 255, 255, 0.09);
   margin-bottom: 10px;
 }
 
@@ -410,7 +487,7 @@ select:focus {
   gap: 10px;
   padding: 11px 12px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.58);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--muted);
   font-weight: 800;
 }
@@ -421,17 +498,17 @@ select:focus {
 
 .check.done {
   color: var(--text);
-  background: var(--good);
+  background: rgba(255, 182, 163, 0.12);
 }
 
 .status.ok {
   background: var(--good);
-  color: #247139;
+  color: #89e8ae;
 }
 
 .status.busy {
   background: var(--busy);
-  color: #a24a16;
+  color: #ffc09a;
 }
 
 .sectionTitle {
@@ -445,14 +522,14 @@ select:focus {
   text-align: center;
   border-radius: 999px;
   padding: 6px 10px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.09);
   color: var(--muted);
   font-weight: 900;
 }
 
 .linkText {
   margin: 8px 0 0;
-  color: #9b6a38;
+  color: var(--accent);
   font-weight: 850;
 }
 
@@ -463,7 +540,7 @@ select:focus {
   display: grid;
   place-items: end center;
   padding: 14px;
-  background: rgba(34, 24, 16, 0.36);
+  background: rgba(0, 0, 0, 0.58);
 }
 
 .modalBox {
@@ -483,7 +560,7 @@ select:focus {
   height: 38px;
   border: 0;
   border-radius: 14px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.12);
   color: var(--text);
   font-size: 24px;
 }
@@ -498,10 +575,10 @@ select:focus {
   border-radius: 20px;
   padding: 14px 16px;
   background: var(--dark);
-  color: #fff;
+  color: var(--darkText);
   text-align: center;
   font-weight: 850;
-  box-shadow: 0 18px 40px rgba(33, 29, 26, 0.28);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
 }
 
 @media (max-width: 380px) {
@@ -516,6 +593,10 @@ select:focus {
 
   .slotCard {
     display: grid;
+  }
+
+  .masterCard {
+    grid-template-columns: auto 1fr;
   }
 
   .book {
