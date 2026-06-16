@@ -128,6 +128,7 @@ const demoCategories = [
 function App() {
   const [mode, setMode] = useState(hasSupabaseConfig ? "supabase" : "local");
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [screen, setScreen] = useState("market");
   const [masterView, setMasterView] = useState("overview");
   const [publicTab, setPublicTab] = useState("slots");
@@ -218,8 +219,12 @@ function App() {
       }
 
       const [{ data: cats }, { data: masterList }] = await Promise.all([
-        supabase.from("categories").select("*").order("name"),
-        supabase.from("masters").select("*").eq("is_visible", true).order("rating", { ascending: false }),
+        supabase.from("categories").select("id,slug,name,emoji").order("name"),
+        supabase
+          .from("masters")
+          .select("id,slug,name,about,city,category,emoji,avatar_url,cover_url,rating,reviews_count,is_pro,is_visible,telegram_id")
+          .eq("is_visible", true)
+          .order("rating", { ascending: false }),
       ]);
 
       const list = masterList || [];
@@ -244,8 +249,9 @@ function App() {
 
       if (slugFromLink) {
         setRole("client");
-        await loadMaster(slugFromLink, true);
+        setScreen("public");
         setCity(list.find((m) => m.slug === slugFromLink)?.city || list[0]?.city || "Красноярск");
+        await loadMaster(slugFromLink, true);
       } else if (ownMaster) {
         setRole("master");
         setMasterView("overview");
@@ -256,7 +262,8 @@ function App() {
         setRole("client");
         setScreen("market");
         setCity(list[0]?.city || "Красноярск");
-        await loadMaster(list[0]?.slug || DEFAULT_MASTER_SLUG, false);
+        // Важно: обычному клиенту на старте не грузим профиль первого мастера.
+        // Он загрузится только после нажатия на карточку мастера.
       }
 
       setMode("supabase");
@@ -270,9 +277,15 @@ function App() {
   }
 
   async function loadMaster(slug, openProfile = true) {
+    if (openProfile) {
+      setProfileLoading(true);
+      setScreen("public");
+    }
+
     if (!hasSupabaseConfig) {
       setState(demoState);
       if (openProfile) setScreen("public");
+      setProfileLoading(false);
       return;
     }
 
@@ -284,21 +297,27 @@ function App() {
 
     if (masterError) throw masterError;
 
+    const isOwnMaster = telegramUser?.id && String(master.telegram_id || "") === telegramUser.id;
+
     const [
       { data: services },
       { data: slots },
       { data: bookings },
-      { data: clients },
+      clientsResult,
       { data: reviews },
       { data: photos },
     ] = await Promise.all([
       supabase.from("services").select("*").eq("master_id", master.id).order("created_at"),
       supabase.from("slots").select("*").eq("master_id", master.id).eq("is_active", true).order("slot_date").order("slot_time"),
-      supabase.from("bookings").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
-      supabase.from("clients").select("*").eq("master_id", master.id).order("last_visit_at", { ascending: false }),
-      supabase.from("reviews").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
-      supabase.from("master_photos").select("*").eq("master_id", master.id).order("created_at", { ascending: false }),
+      supabase.from("bookings").select("*").eq("master_id", master.id).neq("status", "cancelled").order("created_at", { ascending: false }),
+      isOwnMaster
+        ? supabase.from("clients").select("*").eq("master_id", master.id).order("last_visit_at", { ascending: false })
+        : Promise.resolve({ data: [] }),
+      supabase.from("reviews").select("*").eq("master_id", master.id).order("created_at", { ascending: false }).limit(30),
+      supabase.from("master_photos").select("*").eq("master_id", master.id).order("created_at", { ascending: false }).limit(30),
     ]);
+
+    const clients = clientsResult?.data || [];
 
     setState({
       master,
@@ -315,6 +334,7 @@ function App() {
     }
 
     if (openProfile) setScreen("public");
+    setProfileLoading(false);
   }
 
   async function openOwnMasterCabinet(master = masterAccount) {
@@ -1020,7 +1040,7 @@ function App() {
                   <p className="muted">{m.city} · ⭐ {Number(m.rating || 5).toFixed(1)} · {m.reviews_count || 0} отзывов</p>
                   <p className="muted last">{m.about || "Мастер принимает записи через Окошки"}</p>
                 </div>
-                <button className="book" onClick={() => loadMaster(m.slug, true)}>Профиль</button>
+                <button className="book" onClick={() => { setPublicTab("slots"); loadMaster(m.slug, true); }}>Профиль</button>
               </div>
             )) : <Empty text="В этом городе пока нет мастеров." />}
           </div>
@@ -1040,6 +1060,7 @@ function App() {
 
       {screen === "public" && (
         <main className="screen">
+          {profileLoading && <Card title="Загружаем профиль"><p className="muted last">Подтягиваем услуги, окошки и работы мастера...</p></Card>}
           <div className="profile glass profileCover" style={state.master.cover_url ? { backgroundImage: `linear-gradient(180deg, rgba(25,18,18,.22), rgba(25,18,18,.72)), url(${state.master.cover_url})` } : undefined}>
             <Avatar master={state.master} big />
             <div>
@@ -1545,7 +1566,7 @@ function Avatar({ master, big = false }) {
   if (master?.avatar_url) {
     return (
       <div className={cls}>
-        <img src={master.avatar_url} alt={master.name || "Мастер"} />
+        <img src={master.avatar_url} alt={master.name || "Мастер"} loading="lazy" decoding="async" />
       </div>
     );
   }
@@ -1557,9 +1578,9 @@ function WorkPost({ work, canDelete = false, onDelete }) {
   return (
     <article className="workPost">
       {work.image_url ? (
-        <img className="workImage" src={work.image_url} alt={work.title || "Работа мастера"} />
+        <img className="workImage" src={work.image_url} alt={work.title || "Работа мастера"} loading="lazy" decoding="async" />
       ) : work.url ? (
-        <img className="workImage" src={work.url} alt={work.title || "Работа мастера"} />
+        <img className="workImage" src={work.url} alt={work.title || "Работа мастера"} loading="lazy" decoding="async" />
       ) : (
         <div className="workImage placeholder">🖼️</div>
       )}
