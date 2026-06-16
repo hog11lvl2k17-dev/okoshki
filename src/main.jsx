@@ -6,6 +6,7 @@ import { supabase, hasSupabaseConfig } from "./lib/supabase";
 import "./styles.css";
 
 const DEFAULT_MASTER_SLUG = "anna_okoshki";
+const STORAGE_BUCKET = "master-uploads";
 const todayISO = new Date().toISOString().slice(0, 10);
 
 function money(v) {
@@ -59,6 +60,14 @@ function getTelegramUser() {
 function telegramContact(user) {
   if (!user) return "";
   return user.username ? `@${user.username}` : user.first_name || "";
+}
+
+function safeFileName(name) {
+  return String(name || "photo")
+    .toLowerCase()
+    .replace(/[^a-z0-9а-яё._-]+/gi, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 80);
 }
 
 function slotSort(a, b) {
@@ -143,6 +152,12 @@ function App() {
     contact: telegramContact(getTelegramUser()),
   });
   const [isMasterCreating, setIsMasterCreating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [reviewForm, setReviewForm] = useState({
+    client_name: "",
+    rating: "5",
+    text: "",
+  });
   const bookingLock = useRef(false);
 
   useEffect(() => {
@@ -346,13 +361,173 @@ function App() {
   const setupProgress = setupSteps.filter((s) => s.done).length;
 
 
+
+  async function uploadFile(file, folder = "works") {
+    if (!file) return "";
+
+    if (mode !== "supabase") {
+      showToast("Загрузка фото работает только с Supabase");
+      return "";
+    }
+
+    const ext = file.name?.split(".").pop() || "jpg";
+    const path = `${state.master.id}/${folder}/${Date.now()}-${safeFileName(file.name || `photo.${ext}`)}`;
+
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    const { data } = supabase.storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(path);
+
+    return data.publicUrl;
+  }
+
+  async function handleMasterImageUpload(e, field, folder) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+
+    try {
+      const url = await uploadFile(file, folder);
+      if (url) {
+        await updateMaster(field, url);
+        showToast(field === "avatar_url" ? "Аватарка загружена" : "Обложка загружена");
+      }
+    } catch (error) {
+      console.error(error);
+      showToast("Не загрузил фото. Проверь Storage SQL.");
+    } finally {
+      setIsUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  async function deleteWork(workId) {
+    const ok = window.confirm("Удалить эту работу из профиля?");
+    if (!ok) return;
+
+    if (mode === "supabase") {
+      const { error } = await supabase
+        .from("master_photos")
+        .delete()
+        .eq("id", workId)
+        .eq("master_id", state.master.id);
+
+      if (error) return showToast("Не удалил работу: " + error.message);
+    }
+
+    setState((p) => ({
+      ...p,
+      photos: (p.photos || []).filter((photo) => photo.id !== workId),
+    }));
+
+    showToast("Работа удалена");
+  }
+
+  async function addReview(e) {
+    e.preventDefault();
+
+    const name = reviewForm.client_name.trim();
+    const rating = Number(reviewForm.rating || 5);
+    const text = reviewForm.text.trim();
+
+    if (!name || !text) {
+      return showToast("Введи имя и текст отзыва");
+    }
+
+    try {
+      let review;
+
+      if (mode === "supabase") {
+        const { data, error } = await supabase
+          .from("reviews")
+          .insert({
+            master_id: state.master.id,
+            client_name: name,
+            rating,
+            text,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        review = data;
+      } else {
+        review = {
+          id: makeId(),
+          master_id: state.master.id,
+          client_name: name,
+          rating,
+          text,
+          created_at: new Date().toISOString(),
+        };
+      }
+
+      const nextReviews = [review, ...(state.reviews || [])];
+      const nextCount = nextReviews.length;
+      const nextRating = nextReviews.reduce((sum, r) => sum + Number(r.rating || 5), 0) / Math.max(nextCount, 1);
+
+      setState((p) => ({
+        ...p,
+        reviews: nextReviews,
+        master: {
+          ...p.master,
+          reviews_count: nextCount,
+          rating: Number(nextRating.toFixed(1)),
+        },
+      }));
+
+      setMasters((p) => p.map((m) => (
+        m.id === state.master.id
+          ? { ...m, reviews_count: nextCount, rating: Number(nextRating.toFixed(1)) }
+          : m
+      )));
+
+      if (mode === "supabase") {
+        await supabase
+          .from("masters")
+          .update({
+            reviews_count: nextCount,
+            rating: Number(nextRating.toFixed(1)),
+          })
+          .eq("id", state.master.id);
+      }
+
+      setReviewForm({ client_name: "", rating: "5", text: "" });
+      showToast("Отзыв добавлен");
+    } catch (error) {
+      console.error(error);
+      showToast("Не добавил отзыв. Проверь SQL таблицы reviews.");
+    }
+  }
+
   async function addWork(e) {
     e.preventDefault();
 
     const fd = new FormData(e.currentTarget);
-    const image_url = String(fd.get("image_url") || "").trim();
+    let image_url = String(fd.get("image_url") || "").trim();
+    const file = fd.get("photo");
     const title = String(fd.get("title") || "").trim();
     const description = String(fd.get("description") || "").trim();
+
+    if (file && file.size) {
+      setIsUploading(true);
+      try {
+        image_url = await uploadFile(file, "works");
+      } finally {
+        setIsUploading(false);
+      }
+    }
 
     if (!image_url && !title && !description) {
       return showToast("Добавь фото, название или описание работы");
@@ -922,6 +1097,35 @@ function App() {
 
           {publicTab === "reviews" && (
             <>
+              <Card title="Оставить отзыв">
+                <form className="form" onSubmit={addReview}>
+                  <input
+                    placeholder="Ваше имя"
+                    value={reviewForm.client_name}
+                    onChange={(e) => setReviewForm({ ...reviewForm, client_name: e.target.value })}
+                  />
+                  <label>
+                    Оценка
+                    <select
+                      value={reviewForm.rating}
+                      onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+                    >
+                      <option value="5">5 — отлично</option>
+                      <option value="4">4 — хорошо</option>
+                      <option value="3">3 — нормально</option>
+                      <option value="2">2 — плохо</option>
+                      <option value="1">1 — ужасно</option>
+                    </select>
+                  </label>
+                  <input
+                    placeholder="Напишите отзыв"
+                    value={reviewForm.text}
+                    onChange={(e) => setReviewForm({ ...reviewForm, text: e.target.value })}
+                  />
+                  <button className="primary">Опубликовать отзыв</button>
+                </form>
+              </Card>
+
               <h3>Отзывы</h3>
               <div className="cards">
                 {state.reviews?.length ? state.reviews.map((r) => (
@@ -1166,20 +1370,26 @@ function App() {
               <Card title="Мои работы">
                 <div className="feed">
                   {state.photos?.length ? state.photos.map((p) => (
-                    <WorkPost work={p} key={p.id} />
+                    <WorkPost work={p} key={p.id} canDelete onDelete={() => deleteWork(p.id)} />
                   )) : <Empty text="Работ пока нет. Добавь первую работу ниже." />}
                 </div>
               </Card>
 
               <Card title="Добавить работу">
                 <form className="form" onSubmit={addWork}>
-                  <input name="image_url" placeholder="Ссылка на фото работы" />
+                  <label>
+                    Фото работы
+                    <input name="photo" type="file" accept="image/*" />
+                  </label>
+                  <input name="image_url" placeholder="Или ссылка на фото, если надо" />
                   <input name="title" placeholder="Название, например: Нюдовый маникюр" />
                   <input name="description" placeholder="Описание / материалы / цена / детали" />
-                  <button className="primary">Опубликовать работу</button>
+                  <button className="primary" disabled={isUploading}>
+                    {isUploading ? "Загружаем..." : "Опубликовать работу"}
+                  </button>
                 </form>
                 <p className="muted hint">
-                  Сейчас добавляем фото ссылкой. Позже подключим нормальную загрузку изображений через Supabase Storage.
+                  Теперь можно загрузить фото прямо с телефона. Ссылку оставили как запасной вариант.
                 </p>
               </Card>
             </>
@@ -1240,8 +1450,19 @@ function App() {
                   </label>
                   <Input label="Описание" value={state.master.about || ""} onChange={(v) => updateMaster("about", v)} />
                   <Input label="Контакт" value={state.master.contact || ""} onChange={(v) => updateMaster("contact", v)} />
+
+                  <label>
+                    Загрузить аватарку
+                    <input type="file" accept="image/*" onChange={(e) => handleMasterImageUpload(e, "avatar_url", "avatars")} />
+                  </label>
                   <Input label="Аватарка: ссылка на фото" value={state.master.avatar_url || ""} onChange={(v) => updateMaster("avatar_url", v)} />
+
+                  <label>
+                    Загрузить обложку
+                    <input type="file" accept="image/*" onChange={(e) => handleMasterImageUpload(e, "cover_url", "covers")} />
+                  </label>
                   <Input label="Обложка: ссылка на фото" value={state.master.cover_url || ""} onChange={(v) => updateMaster("cover_url", v)} />
+
                   <Input label="Ссылка" value={state.master.slug || ""} onChange={(v) => updateMaster("slug", v.replaceAll(" ", "_").toLowerCase())} />
                   <Input label="Эмодзи" value={state.master.emoji || ""} onChange={(v) => updateMaster("emoji", v)} />
                 </div>
@@ -1332,17 +1553,22 @@ function Avatar({ master, big = false }) {
   return <div className={cls}>{master?.emoji || "✨"}</div>;
 }
 
-function WorkPost({ work }) {
+function WorkPost({ work, canDelete = false, onDelete }) {
   return (
     <article className="workPost">
       {work.image_url ? (
         <img className="workImage" src={work.image_url} alt={work.title || "Работа мастера"} />
+      ) : work.url ? (
+        <img className="workImage" src={work.url} alt={work.title || "Работа мастера"} />
       ) : (
         <div className="workImage placeholder">🖼️</div>
       )}
       <div className="workBody">
         <h4>{work.title || "Работа мастера"}</h4>
         {work.description ? <p className="muted last">{work.description}</p> : null}
+        {canDelete ? (
+          <button className="mini red deleteWork" onClick={onDelete}>Удалить работу</button>
+        ) : null}
       </div>
     </article>
   );

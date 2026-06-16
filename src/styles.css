@@ -603,3 +603,13 @@ select:focus {
     width: 100%;
   }
 }
+
+
+input[type="file"] {
+  padding: 12px;
+  color: var(--muted);
+}
+
+.deleteWork {
+  width: 100%;
+}
