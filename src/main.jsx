@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import WebApp from "@twa-dev/sdk";
 import { CalendarDays, Users, Plus, Link, Home } from "lucide-react";
@@ -27,6 +27,16 @@ function normalizeTime(v) {
 
 function makeId() {
   return crypto.randomUUID();
+}
+
+function makeSlug(text) {
+  const base = String(text || "master")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-zа-я0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return `${base || "master"}_${Math.floor(Math.random() * 100000)}`;
 }
 
 const demoServices = [
@@ -77,6 +87,18 @@ function App() {
   const [selectedSlotId, setSelectedSlotId] = useState(null);
   const [bookingForm, setBookingForm] = useState({ name: "", contact: "", note: "" });
   const [toast, setToast] = useState("");
+  const [role, setRole] = useState(() => localStorage.getItem("okoshki_role") || "client");
+  const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
+  const [lastBooking, setLastBooking] = useState(null);
+  const [masterForm, setMasterForm] = useState({
+    name: "",
+    city: "Красноярск",
+    category: "manicure",
+    about: "",
+    contact: "",
+  });
+  const [isMasterCreating, setIsMasterCreating] = useState(false);
+  const bookingLock = useRef(false);
 
   useEffect(() => {
     try {
@@ -84,6 +106,16 @@ function App() {
       WebApp.expand();
     } catch {}
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("okoshki_role", role);
+  }, [role]);
+
+  useEffect(() => {
+    if (role === "client" && ["master", "bookings", "clients"].includes(screen)) {
+      setScreen("market");
+    }
+  }, [role, screen]);
 
   useEffect(() => {
     loadEverything();
@@ -327,9 +359,19 @@ function App() {
   }
 
   async function createBooking() {
+    if (bookingLock.current) return;
+
     const slot = slotById(selectedSlotId);
     if (!slot) return;
     if (!bookingForm.name.trim() || !bookingForm.contact.trim()) return showToast("Введи имя и контакт");
+
+    if (bookingForSlot(slot.id)) {
+      setSelectedSlotId(null);
+      return showToast("Это окошко уже занято. Выбери другое.");
+    }
+
+    bookingLock.current = true;
+    setIsBookingSubmitting(true);
 
     try {
       const name = bookingForm.name.trim();
@@ -351,7 +393,20 @@ function App() {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        const isDuplicateSlot =
+          error.code === "23505" ||
+          String(error.message || "").includes("one_active_booking_per_slot") ||
+          String(error.details || "").includes("already exists");
+
+        if (isDuplicateSlot) {
+          setSelectedSlotId(null);
+          showToast("Это окошко уже занято. Выбери другое.");
+          return;
+        }
+
+        throw error;
+      }
 
       setState((p) => ({
         ...p,
@@ -367,13 +422,111 @@ function App() {
         service: serviceById(slot.service_id),
       });
 
+      setLastBooking({
+        booking: data,
+        slot,
+        service: serviceById(slot.service_id),
+      });
+
       setSelectedSlotId(null);
       setBookingForm({ name: "", contact: "", note: "" });
-      setScreen("bookings");
-      showToast("Клиент записан");
+      setScreen(role === "master" ? "bookings" : "success");
+      showToast("Вы записаны");
     } catch (e) {
       console.error(e);
-      showToast("Ошибка записи: " + e.message);
+      showToast("Ошибка записи. Попробуй ещё раз.");
+    } finally {
+      bookingLock.current = false;
+      setIsBookingSubmitting(false);
+    }
+  }
+
+  async function createMasterProfile(e) {
+    e.preventDefault();
+
+    const name = masterForm.name.trim();
+    const cityValue = masterForm.city.trim();
+    const about = masterForm.about.trim();
+    const contact = masterForm.contact.trim();
+    const categoryValue = masterForm.category || "manicure";
+
+    if (!name || !cityValue || !about) {
+      return showToast("Заполни имя, город и описание");
+    }
+
+    setIsMasterCreating(true);
+
+    try {
+      const slug = makeSlug(name);
+
+      if (mode === "supabase") {
+        const { data, error } = await supabase
+          .from("masters")
+          .insert({
+            name,
+            city: cityValue,
+            category: categoryValue,
+            about,
+            slug,
+            emoji: "✨",
+            rating: 5,
+            reviews_count: 0,
+            is_visible: true,
+            is_pro: false,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setState((p) => ({
+          ...p,
+          master: data,
+          services: [],
+          slots: [],
+          bookings: [],
+          clients: [],
+          reviews: [],
+        }));
+
+        setMasters((p) => [data, ...p]);
+      } else {
+        const data = {
+          id: makeId(),
+          name,
+          city: cityValue,
+          category: categoryValue,
+          about,
+          contact,
+          slug,
+          emoji: "✨",
+          rating: 5,
+          reviews_count: 0,
+          is_visible: true,
+          is_pro: false,
+        };
+
+        setState((p) => ({
+          ...p,
+          master: data,
+          services: [],
+          slots: [],
+          bookings: [],
+          clients: [],
+          reviews: [],
+        }));
+
+        setMasters((p) => [data, ...p]);
+      }
+
+      setRole("master");
+      setScreen("master");
+      showToast("Профиль мастера создан");
+    } catch (e) {
+      console.error(e);
+      showToast("Не создал профиль. Попробуй другое имя.");
+    } finally {
+      setIsMasterCreating(false);
     }
   }
 
@@ -419,23 +572,35 @@ function App() {
         <div className="logo">🪟</div>
       </header>
 
-      <section className="stats">
-        <Stat title="Сегодня" value={todayBookings.length} sub="записей" />
-        <Stat title="Доход" value={money(todayIncome)} sub="за день" />
-        <Stat title="Клиенты" value={state.clients.length} sub="в базе" />
-      </section>
+      {role === "master" && (
+        <>
+          <section className="stats">
+            <Stat title="Сегодня" value={todayBookings.length} sub="записей" />
+            <Stat title="Доход" value={money(todayIncome)} sub="за день" />
+            <Stat title="Клиенты" value={state.clients.length} sub="в базе" />
+          </section>
 
-      <nav className="tabs">
-        <Tab id="market" screen={screen} setScreen={setScreen} icon={<Home size={19} />} />
-        <Tab id="public" screen={screen} setScreen={setScreen} icon={<Link size={19} />} />
-        <Tab id="master" screen={screen} setScreen={setScreen} icon={<Plus size={19} />} />
-        <Tab id="bookings" screen={screen} setScreen={setScreen} icon={<CalendarDays size={19} />} />
-        <Tab id="clients" screen={screen} setScreen={setScreen} icon={<Users size={19} />} />
-      </nav>
+          <nav className="tabs">
+            <Tab id="master" screen={screen} setScreen={setScreen} icon={<Plus size={19} />} />
+            <Tab id="public" screen={screen} setScreen={setScreen} icon={<Link size={19} />} />
+            <Tab id="bookings" screen={screen} setScreen={setScreen} icon={<CalendarDays size={19} />} />
+            <Tab id="clients" screen={screen} setScreen={setScreen} icon={<Users size={19} />} />
+          </nav>
+        </>
+      )}
+
+      {role === "client" && screen !== "public" && screen !== "success" && (
+        <button
+          className="reset"
+          onClick={() => setScreen("become-master")}
+        >
+          Стать мастером
+        </button>
+      )}
 
       {screen === "market" && (
         <main className="screen">
-          <Card title="Найди мастера">
+          <Card title="Что ищем?">
             <label>
               Город
               <select value={city} onChange={(e) => setCity(e.target.value)}>
@@ -469,9 +634,9 @@ function App() {
             )) : <Empty text="В этом городе пока нет мастеров." />}
           </div>
 
-          <Card title="Для мастера">
-            <p className="muted">Добавь услуги и свободные окошки — клиенты смогут записываться сами.</p>
-            <button className="primary" onClick={() => setScreen("master")}>Кабинет мастера</button>
+          <Card title="Хочешь принимать записи?">
+            <p className="muted">Зарегистрируйся как мастер и добавляй свои свободные окошки.</p>
+            <button className="primary" onClick={() => setScreen("become-master")}>Стать мастером</button>
           </Card>
         </main>
       )}
@@ -522,7 +687,84 @@ function App() {
         </main>
       )}
 
-      {screen === "master" && (
+
+
+      {screen === "become-master" && role === "client" && (
+        <main className="screen">
+          <Card title="Стать мастером">
+            <p className="muted">
+              Создай профиль, добавь услуги и свободные окошки. Клиенты смогут находить тебя в каталоге и записываться без переписки.
+            </p>
+
+            <form className="form" onSubmit={createMasterProfile}>
+              <input
+                placeholder="Имя мастера или студии"
+                value={masterForm.name}
+                onChange={(e) => setMasterForm({ ...masterForm, name: e.target.value })}
+              />
+
+              <input
+                placeholder="Город"
+                value={masterForm.city}
+                onChange={(e) => setMasterForm({ ...masterForm, city: e.target.value })}
+              />
+
+              <label>
+                Категория
+                <select
+                  value={masterForm.category}
+                  onChange={(e) => setMasterForm({ ...masterForm, category: e.target.value })}
+                >
+                  {categories.filter((c) => c.slug !== "all").map((c) => (
+                    <option value={c.slug} key={c.slug}>{c.emoji} {c.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <input
+                placeholder="Коротко о себе: маникюр, брови, барбер..."
+                value={masterForm.about}
+                onChange={(e) => setMasterForm({ ...masterForm, about: e.target.value })}
+              />
+
+              <input
+                placeholder="Контакт для связи, например @username"
+                value={masterForm.contact}
+                onChange={(e) => setMasterForm({ ...masterForm, contact: e.target.value })}
+              />
+
+              <button className="primary" disabled={isMasterCreating}>
+                {isMasterCreating ? "Создаём..." : "Зарегистрироваться как мастер"}
+              </button>
+            </form>
+
+            <button className="reset" onClick={() => setScreen("market")}>Назад к каталогу</button>
+          </Card>
+        </main>
+      )}
+
+      {screen === "success" && (
+        <main className="screen">
+          <Card title="Вы записаны">
+            {lastBooking ? (
+              <div className="item">
+                <h4>✅ Запись создана</h4>
+                <p className="muted">
+                  {lastBooking.service?.name} · {dateHuman(lastBooking.slot?.slot_date)} · {normalizeTime(lastBooking.slot?.slot_time)} · {money(lastBooking.service?.price)}
+                </p>
+                <p className="muted last">
+                  Мастер получил уведомление в Telegram. Если нужно что-то изменить — напишите мастеру по контакту.
+                </p>
+              </div>
+            ) : (
+              <Empty text="Запись создана." />
+            )}
+            <button className="primary" onClick={() => { setRole("client"); setScreen("market"); }}>Вернуться к мастерам</button>
+          </Card>
+        </main>
+      )}
+
+      {screen === "master" && role === "master" && (
         <main className="screen">
           <Card title="Профиль">
             <div className="form">
@@ -566,7 +808,7 @@ function App() {
         </main>
       )}
 
-      {screen === "bookings" && (
+      {screen === "bookings" && role === "master" && (
         <main className="screen">
           <Card title="Записи">
             <div className="cards">
@@ -592,7 +834,7 @@ function App() {
         </main>
       )}
 
-      {screen === "clients" && (
+      {screen === "clients" && role === "master" && (
         <main className="screen">
           <Card title="Клиенты">
             <div className="cards">
@@ -624,13 +866,13 @@ function App() {
             <input placeholder="Имя" value={bookingForm.name} onChange={(e) => setBookingForm({ ...bookingForm, name: e.target.value })} />
             <input placeholder="@telegram или телефон" value={bookingForm.contact} onChange={(e) => setBookingForm({ ...bookingForm, contact: e.target.value })} />
             <input placeholder="Комментарий" value={bookingForm.note} onChange={(e) => setBookingForm({ ...bookingForm, note: e.target.value })} />
-            <button className="primary" onClick={createBooking}>Подтвердить запись</button>
+            <button className="primary" disabled={isBookingSubmitting} onClick={createBooking}>{isBookingSubmitting ? "Записываем..." : "Подтвердить запись"}</button>
           </div>
         </div>
       )}
 
       {toast && <div className="toast">{toast}</div>}
-      <footer><button className="reset" onClick={() => loadEverything()}>Обновить из базы</button></footer>
+      {role === "master" && <footer><button className="reset" onClick={() => loadEverything()}>Обновить из базы</button></footer>}
     </div>
   );
 }
