@@ -301,6 +301,31 @@ function App() {
     return data;
   }
 
+
+  async function sendTelegramNotification({ booking, slot, service }) {
+    try {
+      await fetch("/api/notify-booking", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          masterName: state.master.name,
+          clientName: booking.client_name,
+          clientContact: booking.client_contact,
+          serviceName: service?.name || "Услуга",
+          slotDate: dateHuman(slot?.slot_date),
+          slotTime: normalizeTime(slot?.slot_time),
+          price: money(service?.price),
+          note: booking.note || "",
+          appUrl: window.location.origin,
+        }),
+      });
+    } catch (error) {
+      console.warn("Telegram notification failed:", error);
+    }
+  }
+
   async function createBooking() {
     const slot = slotById(selectedSlotId);
     if (!slot) return;
@@ -335,6 +360,12 @@ function App() {
           ? p.clients.map((c) => (c.id === client.id ? client : c))
           : [client, ...p.clients],
       }));
+
+      await sendTelegramNotification({
+        booking: data,
+        slot,
+        service: serviceById(slot.service_id),
+      });
 
       setSelectedSlotId(null);
       setBookingForm({ name: "", contact: "", note: "" });
